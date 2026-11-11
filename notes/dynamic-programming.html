@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#e7e6e2"><meta name="description" content="A first-principles guide to dynamic programming: define the state, derive a recurrence, draw dependencies, memoize or tabulate, and count the work."><title>Dynamic programming, without the magic words — Babin</title><link rel="stylesheet" href="../assets/css/site.css"></head>
+<body>
+  <div class="reading-progress" aria-hidden="true"></div>
+  <header class="site-header"><nav class="nav wrap" aria-label="Main navigation"><a class="brand" href="../index.html"><svg class="brand-avatar" viewBox="0 0 48 48" aria-hidden="true" focusable="false"><g class="avatar-head"><path d="M8.5 20 7 6l12 7c3-1.5 7-1.5 10 0l12-7-1.5 14" fill="#d4d3ce" stroke="#5e5e59" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 22c0-7 5-11 12-11h8c7 0 12 4 12 11v7c0 7-5 12-12 12h-8C13 41 8 36 8 29z" fill="#eeede9" stroke="#5e5e59" stroke-width="1.6"/><path d="m11 16-1-7 6 4m21 3 1-7-6 4" fill="#c5c4be" stroke="#5e5e59" stroke-width="1.1" stroke-linejoin="round"/><g class="avatar-pupils"><ellipse cx="18.5" cy="24" rx="1.35" ry="2" fill="#292927"/><ellipse cx="29.5" cy="24" rx="1.35" ry="2" fill="#292927"/></g><path d="m21.5 29 2.5 2 2.5-2m-2.5 2v2m0 0c-1.5 2-3.5 2.5-5 1m5-1c1.5 2 3.5 2.5 5 1M14 30l-6-2m6 5-6 1m20-4 6-2m-6 5 6 1" fill="none" stroke="#5e5e59" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></g></svg></a><div class="nav-links"><a href="../index.html#projects">Projects</a><a href="../index.html#notes">Blog</a><a href="../index.html#tools">Tools</a><a href="../index.html#about">About</a></div></nav></header>
+  <main>
+    <header class="page-head wrap" id="top"><p class="breadcrumbs"><a href="../index.html">Home</a><span>/</span><a href="../index.html#notes">Blog</a><span>/</span><span>Dynamic programming</span></p><p class="kicker">Blog / Algorithms</p><h1>Dynamic programming, without the magic words</h1><p class="page-lede">The usual explanation starts with “overlapping subproblems” and “optimal substructure,” then leaves you staring at a blank editor. I find it easier to start with a recursive decision and ask which answers I keep calculating.</p><div class="page-meta"><span>7 min read</span><span>Algorithms · recurrence · complexity</span><span>Worked example</span></div></header>
+    <div class="article-layout wrap">
+      <nav class="toc" aria-label="On this page"><h2>On this page</h2><ol><li><a href="#example">One concrete problem</a></li><li><a href="#state">Name the state</a></li><li><a href="#recurrence">Write the recurrence</a></li><li><a href="#overlap">Where the savings come from</a></li><li><a href="#orders">Memoization / tabulation</a></li><li><a href="#complexity">Count the work</a></li><li><a href="#debug">Debug the model</a></li></ol></nav>
+      <article class="prose">
+        <p>Dynamic programming (DP) is a way to solve a problem by reusing answers to smaller versions of the same problem. The name makes it sound more mysterious than it is. The core work is ordinary reasoning: define a small state, decide how it depends on earlier states, and make sure each state is computed only once.</p>
+        <h2 id="example">Start with one concrete problem</h2>
+        <p>You have unlimited coins with values <code>{1, 3, 4}</code>. What is the fewest number of coins that add up to amount <code>6</code>? A naive approach tries every first coin:</p>
+        <ul><li>take 1, then solve amount 5;</li><li>take 3, then solve amount 3;</li><li>take 4, then solve amount 2.</li></ul>
+        <p>That gives a recursive definition. Let <code>best(x)</code> mean “the minimum coins needed to make amount <code>x</code>.” Once that sentence is precise, most of the solution is already visible.</p>
+        <figure class="figure"><p class="figure-title">Decision tree / the same remainder appears more than once</p>
+          <svg viewBox="0 0 900 350" role="img" aria-label="Recursive coin change choices for amount 6 branch to amounts 5, 3 and 2; branch from 5 also reaches 2, showing overlapping subproblem. Smaller branches reach base amount zero.">
+            <defs><marker id="dp-tree-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <circle cx="450" cy="43" r="24" class="svg-node"/><text x="450" y="48" text-anchor="middle" class="svg-mono">6</text>
+            <circle cx="213" cy="133" r="23" class="svg-node"/><circle cx="450" cy="133" r="23" class="svg-node"/><circle cx="687" cy="133" r="23" class="svg-node"/><text x="213" y="138" text-anchor="middle" class="svg-mono">5</text><text x="450" y="138" text-anchor="middle" class="svg-mono">3</text><text x="687" y="138" text-anchor="middle" class="svg-mono">2</text>
+            <path d="M430 63 231 114m7-1-7 1-1-7M450 69v39m-5-7 5 7 5-7M470 63l199 51m-8-1 8 1 1-7" class="svg-line"/>
+            <circle cx="121" cy="225" r="21" class="svg-node"/><circle cx="213" cy="225" r="21" class="svg-node-dark"/><circle cx="305" cy="225" r="21" class="svg-node"/><text x="121" y="230" text-anchor="middle" class="svg-mono">4</text><text x="213" y="230" text-anchor="middle" class="svg-mono">2</text><text x="305" y="230" text-anchor="middle" class="svg-mono">1</text>
+            <path d="M201 156 128 204m7-1-7 1-1-7M214 157v43m-5-7 5 7 5-7M225 156l73 48m-8-1 8 1 1-7" class="svg-line"/>
+            <circle cx="405" cy="225" r="21" class="svg-node"/><circle cx="497" cy="225" r="21" class="svg-node-dark"/><text x="405" y="230" text-anchor="middle" class="svg-mono">2</text><text x="497" y="230" text-anchor="middle" class="svg-mono">0</text><path d="M440 155 410 201m7-3-7 3-2-7M460 155l31 46m-8-3 8 3 2-8" class="svg-line"/>
+            <circle cx="642" cy="225" r="21" class="svg-node-dark"/><circle cx="734" cy="225" r="21" class="svg-node"/><text x="642" y="230" text-anchor="middle" class="svg-mono">1</text><text x="734" y="230" text-anchor="middle" class="svg-mono">0</text><path d="M675 154 648 201m7-3-7 3-2-7M699 154l31 47m-8-3 8 3 2-8" class="svg-line"/>
+            <path d="M213 248v45H648v-46m-5 7 5-7 5 7" class="svg-dash"/><rect x="330" y="283" width="198" height="42" rx="4" class="svg-node-dark"/><text x="429" y="309" text-anchor="middle" class="svg-small">same subproblem: best(2)</text>
+            <text x="840" y="319" text-anchor="end" class="svg-small">Edges = try one coin, then solve the remainder.</text>
+          </svg>
+          <figcaption>The recursion repeats <code>best(2)</code>. With larger amounts and more choices, the repeated branches multiply quickly.</figcaption>
+        </figure>
+
+        <h2 id="state">Name the state so it contains exactly what the future needs</h2>
+        <p>For this problem, one integer is enough: <code>x</code>, the remaining amount. The state does not need to remember the order in which we chose earlier coins because earlier choices do not change which coins are available next. That is an important modeling test: if two different histories lead to the same state, should they have the same future possibilities and answer? If yes, the state may be sufficient.</p>
+        <p>Start with a base case: <code>best(0) = 0</code>. Making amount zero needs no more coins. An amount below zero is impossible, so treat it as infinity when taking a minimum.</p>
+
+        <h2 id="recurrence">Turn the choice into a recurrence</h2>
+        <p>If the first coin has value <code>c</code>, one coin is used and the remaining amount is <code>x - c</code>. Try each allowed coin and keep the best result:</p>
+        <pre><code>best(0) = 0
+best(x) = 1 + min(best(x - c)) for each coin c where c &lt;= x</code></pre>
+        <p>For amount six:</p>
+        <pre><code>best(6) = 1 + min(best(5), best(3), best(2))
+        = 1 + min(2, 1, 2)
+        = 2  // use 3 + 3</code></pre>
+        <figure class="figure"><p class="figure-title">Bottom-up table / fill smaller amounts first</p>
+          <svg viewBox="0 0 900 280" role="img" aria-label="Table amounts zero to six have minimum coin counts zero, one, two, one, one, two, two for coin values one three four; amount six gets two using amount three plus a coin three">
+            <text x="38" y="52" class="svg-label">Amount x</text><text x="38" y="126" class="svg-label">best(x)</text><text x="38" y="200" class="svg-label">Best last choice</text>
+            <g class="svg-mono" text-anchor="middle"><text x="260" y="52">0</text><text x="345" y="52">1</text><text x="430" y="52">2</text><text x="515" y="52">3</text><text x="600" y="52">4</text><text x="685" y="52">5</text><text x="770" y="52">6</text></g>
+            <g fill="var(--surface-raised)" stroke="var(--line-strong)"><rect x="222" y="70" width="76" height="70"/><rect x="307" y="70" width="76" height="70"/><rect x="392" y="70" width="76" height="70"/><rect x="477" y="70" width="76" height="70"/><rect x="562" y="70" width="76" height="70"/><rect x="647" y="70" width="76" height="70"/><rect x="732" y="70" width="76" height="70" fill="var(--surface-inset)"/></g>
+            <g fill="var(--ink)" font-family="var(--mono)" font-size="16" text-anchor="middle"><text x="260" y="112">0</text><text x="345" y="112">1</text><text x="430" y="112">2</text><text x="515" y="112">1</text><text x="600" y="112">1</text><text x="685" y="112">2</text><text x="770" y="112">2</text></g>
+            <path d="M222 155h586" class="svg-line"/><g class="svg-small" text-anchor="middle"><text x="260" y="192">—</text><text x="345" y="192">1</text><text x="430" y="192">1+1</text><text x="515" y="192">3</text><text x="600" y="192">4</text><text x="685" y="192">3+1+1</text><text x="770" y="192">3+3</text></g>
+            <path d="M515 218v24h255v-24m-5 7 5-7 5 7" class="svg-dash"/><text x="642" y="267" text-anchor="middle" class="svg-small">best(6) depends on earlier states: 5, 3, and 2.</text>
+          </svg>
+          <figcaption>The table values for amounts 0–6 are <code>[0, 1, 2, 1, 1, 2, 2]</code>. For amount 6, the best final coin is 3, so <code>best(6) = best(3) + 1</code>.</figcaption>
+        </figure>
+        <pre><code>dp = [0] + [infinity] * amount
+
+for x in range(1, amount + 1):
+    for coin in coins:
+        if coin &lt;= x:
+            dp[x] = min(dp[x], dp[x - coin] + 1)</code></pre>
+        <p>The loop order matches the dependency direction: before calculating <code>dp[x]</code>, all smaller amounts are already known.</p>
+
+        <h2 id="overlap">The savings come from remembering answers</h2>
+        <p>Without reuse, a recursive solver expands the same remainder over and over. Memoization stores each answer the first time it is computed. Once <code>best(2)</code> has been solved, every later branch reads the stored value instead of expanding that sub-tree again.</p>
+        <section class="micro-lab" id="dp-pruner" aria-labelledby="dp-pruner-title">
+          <div class="lab-heading"><p class="small-label" id="dp-pruner-title">Prune the Fibonacci call tree</p><span class="lab-tag">fib(5) · same state, one answer</span></div>
+          <div class="dp-controls"><button class="quiet-button" id="dp-memoize" type="button" aria-pressed="false">Memoize: off</button><span id="dp-call-count" class="lab-tag" aria-live="polite">15 calls · 15 expanded</span></div>
+          <div class="dp-tree-scroll"><div class="dp-tree" id="dp-tree" role="img" aria-label="Recursive call tree for fib of five"></div></div>
+          <p class="lab-status" id="dp-tree-status" aria-live="polite">The tree repeats the same Fibonacci states down separate branches.</p>
+        </section>
+
+        <figure class="figure"><p class="figure-title">Recursion tree becomes a dependency graph</p>
+          <svg viewBox="0 0 900 285" role="img" aria-label="Repeated recursive calls merge into one graph node per amount. The six states zero through six and edges to smaller remainders form a directed acyclic graph that can be evaluated once per node">
+            <defs><marker id="dp-dag-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <circle cx="105" cy="85" r="24" class="svg-node-dark"/><circle cx="238" cy="85" r="24" class="svg-node"/><circle cx="371" cy="85" r="24" class="svg-node"/><circle cx="504" cy="85" r="24" class="svg-node"/><circle cx="637" cy="85" r="24" class="svg-node"/><circle cx="770" cy="85" r="24" class="svg-node"/>
+            <g class="svg-mono" text-anchor="middle"><text x="105" y="90">0</text><text x="238" y="90">1</text><text x="371" y="90">2</text><text x="504" y="90">3</text><text x="637" y="90">4</text><text x="770" y="90">5</text></g>
+            <path d="M105 115v64h532v-64m-5 7 5-7 5 7" class="svg-dash"/><circle cx="637" cy="208" r="24" class="svg-node"/><text x="637" y="213" text-anchor="middle" class="svg-mono">6</text>
+            <path d="M637 185 637 115m-5 7 5-7 5 7M613 203l-102-93m8 3-8-3-1 8M617 218l-225-120m8 2-8-2 2 8" class="svg-line"/>
+            <text x="374" y="259" text-anchor="middle" class="svg-small">One stored answer per state, even if several paths reach it.</text>
+          </svg>
+          <figcaption>Each amount is a node. An edge points from the amount being solved to the smaller remainder needed to solve it.</figcaption>
+        </figure>
+
+        <h2 id="orders">Memoization and tabulation are two evaluation orders</h2>
+        <div class="table-wrap"><table><thead><tr><th>Top-down / memoized</th><th>Bottom-up / tabulated</th></tr></thead><tbody><tr><td>Write the recurrence recursively; cache each state.</td><td>Choose an order that computes dependencies first.</td></tr><tr><td>Often computes only states reachable from the requested answer.</td><td>Often makes memory and iteration order explicit.</td></tr><tr><td>Call-stack depth can become a limit.</td><td>Can be easier to optimize to rolling memory.</td></tr><tr><td>Good while deriving or when many states are unreachable.</td><td>Good when the full state range is manageable.</td></tr></tbody></table></div>
+        <p>They are not different algorithms in spirit. Both evaluate the same recurrence and reuse each subproblem. The choice is mostly about clarity, reachable states, recursion depth, and memory.</p>
+
+        <h2 id="complexity">Count states and transitions—not branches in the tree</h2>
+        <p>There are <code>amount + 1</code> states. For each amount, we try each of <code>k</code> coin values. That gives <code>O(amount × k)</code> time and <code>O(amount)</code> space. The uncached recursion can be exponential because the tree repeats work; the DP graph shares those repeated states.</p>
+        <p>For another problem, use this same accounting: how many distinct states can exist? How many choices/transitions do we inspect from each one? What does the stored answer cost? A recurrence can be correct and still too large if the state definition includes unnecessary detail.</p>
+
+        <h2 id="debug">A practical way to debug a DP</h2>
+        <ol><li>Write one sentence for the state: “<code>dp[x]</code> means …”.</li><li>List the decisions available from that state, including what information each decision changes.</li><li>Write the recurrence in math or pseudocode before optimizing.</li><li>Check the smallest/base cases by hand.</li><li>Draw arrows from a state to the smaller states it needs; make sure the graph has a valid evaluation order.</li><li>Compute a tiny example by hand and compare it to a table.</li><li>Count unique states × work per state; then count stored values.</li><li>Only after correctness, consider reducing memory or changing the recurrence.</li></ol>
+        <div class="callout"><p class="small-label">When it is not DP</p><p>Recursion alone does not imply dynamic programming. If branches do not revisit the same state, memoization may add overhead without saving work. If the state forgets information that changes future options, caching it can produce a wrong answer.</p></div>
+        <div class="next-links"><a href="judge-pipeline.html">← Previous: Judge pipeline</a><a href="the-dao-hack.html">Next: The DAO hack →</a></div>
+      </article>
+    </div>
+  </main>
+  <footer class="site-footer wrap"><div class="footer-row"><span>© <span id="year">2026</span> Babin</span><span class="footer-links"><a href="#top">Back to top ↑</a><button class="buddy-toggle utility-toggle" id="grid-toggle" type="button" aria-pressed="false">Grid: off</button><button class="buddy-toggle utility-toggle" id="shortcuts-toggle" type="button" aria-haspopup="dialog">Keys ?</button><button class="buddy-toggle" id="sound-toggle" type="button" aria-pressed="false" aria-label="Turn meow sounds on">Meow: off</button><button class="buddy-toggle" id="pip-toggle" hidden type="button" aria-pressed="true">Pip on</button></span></div></footer><script src="../assets/js/site.js"></script>
+</body></html>

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#e7e6e2"><meta name="description" content="A visual walk through an HTTP request: name lookup, connection, request semantics, server response, caching, and browser rendering."><title>HTTP, from the first byte — Babin</title><link rel="stylesheet" href="../assets/css/site.css"></head>
+<body>
+  <div class="reading-progress" aria-hidden="true"></div>
+  <header class="site-header"><nav class="nav wrap" aria-label="Main navigation"><a class="brand" href="../index.html"><svg class="brand-avatar" viewBox="0 0 48 48" aria-hidden="true" focusable="false"><g class="avatar-head"><path d="M8.5 20 7 6l12 7c3-1.5 7-1.5 10 0l12-7-1.5 14" fill="#d4d3ce" stroke="#5e5e59" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 22c0-7 5-11 12-11h8c7 0 12 4 12 11v7c0 7-5 12-12 12h-8C13 41 8 36 8 29z" fill="#eeede9" stroke="#5e5e59" stroke-width="1.6"/><path d="m11 16-1-7 6 4m21 3 1-7-6 4" fill="#c5c4be" stroke="#5e5e59" stroke-width="1.1" stroke-linejoin="round"/><g class="avatar-pupils"><ellipse cx="18.5" cy="24" rx="1.35" ry="2" fill="#292927"/><ellipse cx="29.5" cy="24" rx="1.35" ry="2" fill="#292927"/></g><path d="m21.5 29 2.5 2 2.5-2m-2.5 2v2m0 0c-1.5 2-3.5 2.5-5 1m5-1c1.5 2 3.5 2.5 5 1M14 30l-6-2m6 5-6 1m20-4 6-2m-6 5 6 1" fill="none" stroke="#5e5e59" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></g></svg></a><div class="nav-links"><a href="../index.html#projects">Projects</a><a href="../index.html#notes">Blog</a><a href="../index.html#tools">Tools</a><a href="../index.html#about">About</a></div></nav></header>
+  <main>
+    <header class="page-head wrap" id="top"><p class="breadcrumbs"><a href="../index.html">Home</a><span>/</span><a href="../index.html#notes">Blog</a><span>/</span><span>HTTP</span></p><p class="kicker">Blog / Networking</p><h1>HTTP, from the first byte to the page</h1><p class="page-lede">A URL in the address bar looks like one action. Underneath it is a chain of smaller jobs: find the server, establish a connection, make a request, decide what the response means, then turn bytes into a page.</p><div class="page-meta"><span>9 min read</span><span>HTTP · DNS · TLS · caching</span><span>From the backend learning notes</span></div></header>
+    <div class="article-layout wrap">
+      <nav class="toc" aria-label="On this page"><h2>On this page</h2><ol><li><a href="#layers">The layers</a></li><li><a href="#request">The request</a></li><li><a href="#server">At the server</a></li><li><a href="#response">The response</a></li><li><a href="#methods">Method promises</a></li><li><a href="#cache">Caching + validation</a></li><li><a href="#browser">Back in the browser</a></li><li><a href="#cors">Where CORS fits</a></li></ol></nav>
+      <article class="prose">
+        <p>HTTP is the application-level conversation between a client and a server. It gives meaning to things like <code>GET /articles</code>, a response code, a header, or a body. It does <em>not</em> by itself decide how a hostname becomes an IP address, how packets find the machine, or how bytes are encrypted. Those jobs belong to surrounding layers.</p>
+        <p>This separation is useful because it keeps the mental model small. When a page fails, ask which job failed: name lookup, connection, TLS, routing, application logic, response interpretation, or rendering?</p>
+
+        <h2 id="layers">First, separate the layers</h2>
+        <p>For <code>https://notes.example.dev/posts/42?view=full</code>, the browser parses the URL into scheme, host, port, path, and query. The host must be resolved to an address. The browser then creates a transport connection. For HTTP/1.1 or HTTP/2 over TCP, HTTPS adds a TLS handshake; HTTP/3 uses QUIC over UDP and integrates its security handshake with that transport.</p>
+        <figure class="figure"><p class="figure-title">One page load / who does which job?</p>
+          <svg viewBox="0 0 920 430" role="img" aria-label="Browser parses URL, DNS resolves the host, network reaches a server, TCP plus TLS or QUIC establishes a protected connection, HTTP request reaches proxy and app, then response returns for rendering">
+            <defs><marker id="http-layers-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <rect x="20" y="32" width="158" height="73" rx="4" class="svg-node"/><rect x="205" y="32" width="158" height="73" rx="4" class="svg-node"/><rect x="390" y="32" width="158" height="73" rx="4" class="svg-node"/><rect x="575" y="32" width="158" height="73" rx="4" class="svg-node"/><rect x="760" y="32" width="140" height="73" rx="4" class="svg-node"/>
+            <text x="99" y="62" text-anchor="middle" class="svg-label">URL parse</text><text x="99" y="84" text-anchor="middle" class="svg-small">scheme · host · path</text><text x="284" y="62" text-anchor="middle" class="svg-label">DNS</text><text x="284" y="84" text-anchor="middle" class="svg-small">host → address</text><text x="469" y="62" text-anchor="middle" class="svg-label">Connect</text><text x="469" y="84" text-anchor="middle" class="svg-small">TCP+TLS or QUIC</text><text x="654" y="62" text-anchor="middle" class="svg-label">HTTP</text><text x="654" y="84" text-anchor="middle" class="svg-small">request semantics</text><text x="830" y="62" text-anchor="middle" class="svg-label">Origin</text><text x="830" y="84" text-anchor="middle" class="svg-small">proxy → app</text>
+            <path d="M178 68h27m-6-5 6 5-6 5M363 68h27m-6-5 6 5-6 5M548 68h27m-6-5 6 5-6 5M733 68h27m-6-5 6 5-6 5" class="svg-line"/>
+            <path d="M830 105v78H99V105m-5 7 5-7 5 7" class="svg-dash"/><text x="460" y="169" text-anchor="middle" class="svg-small">response bytes travel back over the established connection</text>
+            <rect x="45" y="220" width="250" height="72" rx="4" class="svg-node-dark"/><rect x="335" y="220" width="250" height="72" rx="4" class="svg-node-dark"/><rect x="625" y="220" width="250" height="72" rx="4" class="svg-node-dark"/>
+            <text x="170" y="250" text-anchor="middle" class="svg-label">HTTP/1.1</text><text x="170" y="273" text-anchor="middle" class="svg-small">text-based message syntax</text><text x="460" y="250" text-anchor="middle" class="svg-label">HTTP/2</text><text x="460" y="273" text-anchor="middle" class="svg-small">framed streams over TCP</text><text x="750" y="250" text-anchor="middle" class="svg-label">HTTP/3</text><text x="750" y="273" text-anchor="middle" class="svg-small">QUIC streams over UDP</text>
+            <path d="M170 292v34h580v-34" class="svg-dash"/><text x="460" y="350" text-anchor="middle" class="svg-small">Different wire protocols; the core HTTP meaning of methods, status codes, and fields is shared.</text>
+            <text x="460" y="400" text-anchor="middle" class="svg-mono">HTTP tells the endpoints what the exchanged message means.</text>
+          </svg>
+          <figcaption>DNS, transport, encryption, HTTP, and browser rendering cooperate, but they are not the same protocol. Caches can skip some steps on a warm visit.</figcaption>
+        </figure>
+
+        <h2 id="request">An HTTP request has intent and context</h2>
+        <p>In HTTP/1.1, a request is commonly written as a start line, header fields, a blank line, and an optional body. That visible text is a good teaching format; HTTP/2 and HTTP/3 do not send that exact text representation on the wire.</p>
+        <pre><code>GET /posts/42?view=full HTTP/1.1
+Host: notes.example.dev
+Accept: text/html
+Cookie: session=...
+
+</code></pre>
+        <p>The method says what operation the client is asking for. The target identifies the resource or operation. Headers add context: acceptable response formats, authentication, caching conditions, content type, and more. A body often carries input for methods such as <code>POST</code> or <code>PATCH</code>, but the method's semantics—not the presence of a body—tell the server what that input means.</p>
+        <figure class="figure"><p class="figure-title">Anatomy / HTTP/1.1 teaching view</p>
+          <svg viewBox="0 0 900 310" role="img" aria-label="HTTP request is made of method, target, protocol version, headers, blank line and optional message body">
+            <rect x="35" y="35" width="830" height="45" rx="4" class="svg-node"/><text x="55" y="63" class="svg-mono">GET</text><text x="145" y="63" class="svg-mono">/posts/42?view=full</text><text x="492" y="63" class="svg-mono">HTTP/1.1</text>
+            <path d="M101 80v42m-4-6 4 6 4-6M265 80v42m-4-6 4 6 4-6M540 80v42m-4-6 4 6 4-6" class="svg-line"/>
+            <text x="101" y="139" text-anchor="middle" class="svg-small">method</text><text x="265" y="139" text-anchor="middle" class="svg-small">request target</text><text x="540" y="139" text-anchor="middle" class="svg-small">version (shown in HTTP/1.1)</text>
+            <rect x="35" y="161" width="830" height="84" rx="4" class="svg-node-dark"/><text x="58" y="190" class="svg-mono">Host: notes.example.dev</text><text x="58" y="214" class="svg-mono">Accept: text/html</text><path d="M35 255h830" class="svg-line" stroke-dasharray="2 4"/><text x="58" y="281" class="svg-mono">[optional request body]</text>
+            <text x="790" y="190" text-anchor="end" class="svg-small">headers</text><text x="790" y="280" text-anchor="end" class="svg-small">body</text>
+          </svg>
+          <figcaption>HTTP/1.1 is shown because the structure is legible. HTTP/2 and HTTP/3 encode fields into frames, but preserve their meaning.</figcaption>
+        </figure>
+
+        <h2 id="server">What happens between the request and the handler?</h2>
+        <p>The request often hits an edge layer before application code: a CDN may serve a cached response, a reverse proxy may terminate TLS and route by host/path, and middleware may apply request-size limits, parse cookies, authenticate a session, or validate input. Only then does a route handler call the business logic and data store.</p>
+        <figure class="figure"><p class="figure-title">Inside the origin / a common server path</p>
+          <svg viewBox="0 0 900 250" role="img" aria-label="Request passes through CDN or reverse proxy, middleware, route handler, service and database; response bubbles back out">
+            <defs><marker id="http-server-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <rect x="18" y="54" width="145" height="72" rx="4" class="svg-node"/><rect x="197" y="54" width="145" height="72" rx="4" class="svg-node"/><rect x="376" y="54" width="145" height="72" rx="4" class="svg-node"/><rect x="555" y="54" width="145" height="72" rx="4" class="svg-node"/><rect x="734" y="54" width="145" height="72" rx="4" class="svg-node"/>
+            <text x="90" y="84" text-anchor="middle" class="svg-label">Edge / proxy</text><text x="90" y="106" text-anchor="middle" class="svg-small">TLS · routing · cache</text><text x="269" y="84" text-anchor="middle" class="svg-label">Middleware</text><text x="269" y="106" text-anchor="middle" class="svg-small">parse · auth · validate</text><text x="448" y="84" text-anchor="middle" class="svg-label">Route</text><text x="448" y="106" text-anchor="middle" class="svg-small">HTTP-level decision</text><text x="627" y="84" text-anchor="middle" class="svg-label">Service</text><text x="627" y="106" text-anchor="middle" class="svg-small">business rules</text><text x="806" y="84" text-anchor="middle" class="svg-label">Database</text><text x="806" y="106" text-anchor="middle" class="svg-small">durable state</text>
+            <path d="M163 90h34m-6-5 6 5-6 5M342 90h34m-6-5 6 5-6 5M521 90h34m-6-5 6 5-6 5M700 90h34m-6-5 6 5-6 5" class="svg-line"/>
+            <path d="M806 126v62H90v-62m-5 7 5-7 5 7" class="svg-dash"/><text x="448" y="219" text-anchor="middle" class="svg-small">response status + headers + optional body return through the stack</text>
+          </svg>
+          <figcaption>This is a common arrangement, not a required HTTP architecture. A small application can combine many boxes in one process.</figcaption>
+        </figure>
+
+        <h2 id="response">A response says both “what” and “how to interpret it”</h2>
+        <p>A response contains a status code, header fields, and sometimes a body. <code>200</code> means the request succeeded in a general way; <code>201</code> commonly reports a created resource; <code>204</code> means success with no response content; <code>304</code> tells a cache that its stored representation is still valid. <code>400</code>, <code>401</code>, <code>403</code>, and <code>404</code> describe different client-side or access outcomes. The exact code matters because browsers, proxies, and clients make decisions from it.</p>
+        <p>Headers carry metadata about the response representation and handling: <code>Content-Type</code> says what the body is, <code>Cache-Control</code> describes caching policy, <code>Set-Cookie</code> asks the browser to store a cookie, and <code>ETag</code> can identify a representation version. HTTP messages are not necessarily human-readable text; a body can be JSON, HTML, an image, a video stream, or binary data.</p>
+
+        <h2 id="methods">Methods make promises about effects</h2>
+        <p>Two HTTP method properties are especially useful when designing an API:</p>
+        <ul><li><strong>Safe</strong> means the client is asking for a representation or status, not requesting a state change. <code>GET</code> is defined as safe. Logging the request is fine; turning a <code>GET</code> into “delete account” is not.</li><li><strong>Idempotent</strong> means repeating the same request has the same intended effect on server state as making it once. The response may differ. <code>PUT</code> and <code>DELETE</code> are defined as idempotent; <code>POST</code> is not inherently idempotent.</li></ul>
+        <p>This matters when a connection breaks at an awkward moment. The server may have completed a payment-like <code>POST</code> even though the client never received the response. Blindly retrying can create a duplicate. A client-generated idempotency key lets a server recognize a retry of the same logical operation and return the original result.</p>
+        <figure class="figure"><p class="figure-title">Timeout ambiguity / did the operation happen?</p>
+          <svg viewBox="0 0 900 245" role="img" aria-label="Client sends POST, server commits, response is lost, retry without idempotency key risks duplicate; with key server returns the prior outcome">
+            <defs><marker id="http-time-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <text x="125" y="27" text-anchor="middle" class="svg-label">Client</text><text x="461" y="27" text-anchor="middle" class="svg-label">Server</text><text x="766" y="27" text-anchor="middle" class="svg-label">Database</text>
+            <path d="M125 38v184M461 38v184M766 38v184" class="svg-dash"/>
+            <path d="M125 72h336m-7-5 7 5-7 5" class="svg-line"/><text x="293" y="64" text-anchor="middle" class="svg-small">POST /charge</text>
+            <path d="M461 103h305m-7-5 7 5-7 5" class="svg-line"/><text x="611" y="95" text-anchor="middle" class="svg-small">commit charge</text>
+            <path d="M461 132H125" class="svg-dash"/><text x="294" y="126" text-anchor="middle" class="svg-small">response lost on network</text>
+            <path d="M125 165h336m-7-5 7 5-7 5" class="svg-line"/><text x="293" y="157" text-anchor="middle" class="svg-small">client retries (uncertain)</text>
+            <path d="M461 194h305m-7-5 7 5-7 5" class="svg-dash"/><text x="611" y="186" text-anchor="middle" class="svg-small">without key: may charge twice</text>
+            <text x="460" y="235" text-anchor="middle" class="svg-mono">Idempotency key: retry the same operation ID, not a new one.</text>
+          </svg>
+          <figcaption>The server cannot infer from a dropped response whether the client saw success. This is why operation identity and retry rules belong in API design.</figcaption>
+        </figure>
+
+        <h2 id="cache">Caching: avoid repeating work when the representation is still fresh</h2>
+        <p>Caching is not a shortcut bolted onto a URL; it is a protocol conversation. A response can state a freshness lifetime using <code>Cache-Control</code>. While that representation is fresh, a browser or intermediary can reuse it without contacting the origin. Later, the cache can ask if its copy is still current with a validator such as <code>If-None-Match: "abc123"</code>. The server can answer <code>304 Not Modified</code>, so the cache reuses its body.</p>
+        <figure class="figure"><p class="figure-title">Freshness first, conditional request later</p>
+          <svg viewBox="0 0 900 280" role="img" aria-label="Origin returns a representation with cache-control and ETag. Cache reuses it while fresh, then sends If-None-Match; origin returns 304 when unchanged or 200 with a new body when changed">
+            <defs><marker id="http-cache-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <rect x="50" y="46" width="180" height="64" rx="4" class="svg-node"/><rect x="362" y="46" width="180" height="64" rx="4" class="svg-node-dark"/><rect x="670" y="46" width="180" height="64" rx="4" class="svg-node"/>
+            <text x="140" y="74" text-anchor="middle" class="svg-label">Origin server</text><text x="140" y="96" text-anchor="middle" class="svg-small">current representation</text><text x="452" y="74" text-anchor="middle" class="svg-label">Browser / CDN cache</text><text x="452" y="96" text-anchor="middle" class="svg-small">stores body + validators</text><text x="760" y="74" text-anchor="middle" class="svg-label">User</text><text x="760" y="96" text-anchor="middle" class="svg-small">needs representation</text>
+            <path d="M230 65h132m-7-5 7 5-7 5" class="svg-line"/><text x="295" y="57" text-anchor="middle" class="svg-small">200 + max-age + ETag</text>
+            <path d="M542 92h128m-7-5 7 5-7 5" class="svg-line"/><text x="603" y="84" text-anchor="middle" class="svg-small">body</text>
+            <path d="M670 166H542m7-5-7 5 7 5M362 166H230m7-5-7 5 7 5" class="svg-dash"/><text x="450" y="153" text-anchor="middle" class="svg-small">when stale: If-None-Match: ETag</text>
+            <path d="M230 201h132m-7-5 7 5-7 5" class="svg-line"/><text x="295" y="224" text-anchor="middle" class="svg-small">304 if unchanged</text>
+            <path d="M230 240h132m-7-5 7 5-7 5" class="svg-dash"/><text x="295" y="264" text-anchor="middle" class="svg-small">200 + new body if changed</text>
+            <text x="674" y="208" class="svg-small">Either way, reuse or replace cached body.</text>
+          </svg>
+          <figcaption>Freshness directives, validators, and cache keys determine what is reusable. Sensitive or user-specific responses need deliberate cache policy.</figcaption>
+        </figure>
+        <p>For an application, the first useful question is “who can reuse this response?” A public product page may be reusable by a shared cache; a private profile response usually must not leak between users. Cache correctness depends on the representation and the headers that vary it, not just on whether the URL looks public.</p>
+
+        <h2 id="browser">The last leg happens in the browser</h2>
+        <p>The response might be HTML that points to CSS, JavaScript, images, and fonts. The browser parses HTML into a DOM, parses CSS into style rules, computes layout, paints pixels, and executes scripts. Those scripts can request more resources, which starts more HTTP conversations. A “page load” is often a dependency graph, not one request.</p>
+        <figure class="figure"><p class="figure-title">HTML is often the start of a request graph</p>
+          <svg viewBox="0 0 900 260" role="img" aria-label="HTML response creates a DOM, parser discovers CSS and JavaScript, requests those resources, then style/layout/paint produces pixels; script may trigger further requests">
+            <defs><marker id="http-render-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <rect x="21" y="76" width="138" height="64" rx="4" class="svg-node"/><rect x="205" y="76" width="138" height="64" rx="4" class="svg-node"/><rect x="389" y="30" width="138" height="64" rx="4" class="svg-node"/><rect x="389" y="155" width="138" height="64" rx="4" class="svg-node"/><rect x="575" y="76" width="138" height="64" rx="4" class="svg-node"/><rect x="759" y="76" width="138" height="64" rx="4" class="svg-node-dark"/>
+            <text x="90" y="105" text-anchor="middle" class="svg-label">HTML</text><text x="90" y="127" text-anchor="middle" class="svg-small">response</text><text x="274" y="105" text-anchor="middle" class="svg-label">Parse</text><text x="274" y="127" text-anchor="middle" class="svg-small">DOM + resource refs</text><text x="458" y="59" text-anchor="middle" class="svg-label">CSS</text><text x="458" y="81" text-anchor="middle" class="svg-small">rules + fonts</text><text x="458" y="184" text-anchor="middle" class="svg-label">JavaScript</text><text x="458" y="206" text-anchor="middle" class="svg-small">may fetch more</text><text x="644" y="105" text-anchor="middle" class="svg-label">Render</text><text x="644" y="127" text-anchor="middle" class="svg-small">style · layout · paint</text><text x="828" y="105" text-anchor="middle" class="svg-label">Pixels</text><text x="828" y="127" text-anchor="middle" class="svg-small">what we see</text>
+            <path d="M159 108h46m-7-5 7 5-7 5M343 96l46-31m-8 1 8-1 1 8M343 120l46 51m-8-2 8 2 2-8M527 62l48 32m-8-1 8 1 0-8M527 188l48-46m-8 1 8-1-1 8M713 108h46m-7-5 7 5-7 5" class="svg-line"/>
+          </svg>
+          <figcaption>Large or render-blocking resources can dominate the time to visible content even after the first HTML response arrives.</figcaption>
+        </figure>
+
+        <h2 id="cors">CORS is a browser permission check, not an API login system</h2>
+        <p>When JavaScript at one origin requests a different origin, the browser applies the same-origin policy. Cross-Origin Resource Sharing (CORS) is the server's way to tell the browser which origins may read the response. Some requests can be sent directly; a request using a non-safelisted method, header, or content type can trigger an <code>OPTIONS</code> preflight first. The browser sends the actual request only if the preflight response allows it.</p>
+        <p>CORS does not authenticate the user, and it does not stop a command-line client from calling an API. Authentication and authorization still belong on the server. CORS primarily controls what browser scripts are permitted to read.</p>
+        <figure class="figure"><p class="figure-title">Preflight / browser asks before sending the real request</p>
+          <svg viewBox="0 0 900 230" role="img" aria-label="Browser script sends OPTIONS preflight with origin and requested method; server returns allow origin/method/headers; only then browser sends actual request and receives response">
+            <defs><marker id="http-cors-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <text x="136" y="25" text-anchor="middle" class="svg-label">Browser at app.test</text><text x="752" y="25" text-anchor="middle" class="svg-label">API at api.test</text><path d="M136 36v178M752 36v178" class="svg-dash"/>
+            <path d="M136 68h616m-7-5 7 5-7 5" class="svg-line"/><text x="444" y="60" text-anchor="middle" class="svg-small">OPTIONS + Origin + requested method/headers</text>
+            <path d="M752 104H136m7-5-7 5 7 5" class="svg-line"/><text x="444" y="96" text-anchor="middle" class="svg-small">allow-origin / allow-methods / allow-headers</text>
+            <path d="M136 148h616m-7-5 7 5-7 5" class="svg-line"/><text x="444" y="140" text-anchor="middle" class="svg-small">actual request (only if allowed)</text>
+            <path d="M752 184H136m7-5-7 5 7 5" class="svg-dash"/><text x="444" y="176" text-anchor="middle" class="svg-small">response exposed to the script</text>
+          </svg>
+        </figure>
+        <p class="muted small">This is the mental model I use when reading network logs: locate the earliest layer that could have answered the request, then follow the bytes until the browser can render them.</p>
+
+        <h2 id="sources">References</h2>
+        <ul class="source-list"><li><a href="https://www.rfc-editor.org/rfc/rfc9110.html" target="_blank" rel="noopener noreferrer">RFC 9110 — HTTP Semantics</a></li><li><a href="https://www.rfc-editor.org/rfc/rfc9111.html" target="_blank" rel="noopener noreferrer">RFC 9111 — HTTP Caching</a></li><li><a href="https://www.rfc-editor.org/rfc/rfc9113.html" target="_blank" rel="noopener noreferrer">RFC 9113 — HTTP/2</a> and <a href="https://www.rfc-editor.org/rfc/rfc9114.html" target="_blank" rel="noopener noreferrer">RFC 9114 — HTTP/3</a></li><li><a href="https://www.rfc-editor.org/rfc/rfc8446.html" target="_blank" rel="noopener noreferrer">RFC 8446 — TLS 1.3</a></li></ul>
+        <div class="next-links"><a href="../index.html#notes">← All posts</a><a href="message-lifecycle.html">Next post: Chat message lifecycle →</a></div>
+      </article>
+    </div>
+  </main>
+  <footer class="site-footer wrap"><div class="footer-row"><span>© <span id="year">2026</span> Babin</span><span class="footer-links"><a href="#top">Back to top ↑</a><button class="buddy-toggle utility-toggle" id="grid-toggle" type="button" aria-pressed="false">Grid: off</button><button class="buddy-toggle utility-toggle" id="shortcuts-toggle" type="button" aria-haspopup="dialog">Keys ?</button><button class="buddy-toggle" id="sound-toggle" type="button" aria-pressed="false" aria-label="Turn meow sounds on">Meow: off</button><button class="buddy-toggle" id="pip-toggle" hidden type="button" aria-pressed="true">Pip on</button></span></div></footer><script src="../assets/js/site.js"></script>
+</body></html>

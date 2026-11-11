@@ -1,0 +1,19 @@
+# Local operating-system and editor files
+.DS_Store
+**/.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Tool output and dependency folders (this site has no build step)
+node_modules/
+.vercel/
+npm-debug.log*
+*.log

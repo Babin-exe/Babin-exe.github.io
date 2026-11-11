@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#e7e6e2"><meta name="description" content="How the WebSocket HTTP upgrade, accept key, frame rules, origin checks, and heartbeat behavior work in ChatApplication."><title>What the WebSocket handshake does — Babin</title><link rel="stylesheet" href="../assets/css/site.css"></head>
+<body>
+  <div class="reading-progress" aria-hidden="true"></div>
+  <header class="site-header"><nav class="nav wrap" aria-label="Main navigation"><a class="brand" href="../index.html"><svg class="brand-avatar" viewBox="0 0 48 48" aria-hidden="true" focusable="false"><g class="avatar-head"><path d="M8.5 20 7 6l12 7c3-1.5 7-1.5 10 0l12-7-1.5 14" fill="#d4d3ce" stroke="#5e5e59" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 22c0-7 5-11 12-11h8c7 0 12 4 12 11v7c0 7-5 12-12 12h-8C13 41 8 36 8 29z" fill="#eeede9" stroke="#5e5e59" stroke-width="1.6"/><path d="m11 16-1-7 6 4m21 3 1-7-6 4" fill="#c5c4be" stroke="#5e5e59" stroke-width="1.1" stroke-linejoin="round"/><g class="avatar-pupils"><ellipse cx="18.5" cy="24" rx="1.35" ry="2" fill="#292927"/><ellipse cx="29.5" cy="24" rx="1.35" ry="2" fill="#292927"/></g><path d="m21.5 29 2.5 2 2.5-2m-2.5 2v2m0 0c-1.5 2-3.5 2.5-5 1m5-1c1.5 2 3.5 2.5 5 1M14 30l-6-2m6 5-6 1m20-4 6-2m-6 5 6 1" fill="none" stroke="#5e5e59" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></g></svg></a><div class="nav-links"><a href="../index.html#projects">Projects</a><a href="../index.html#notes">Blog</a><a href="../index.html#tools">Tools</a><a href="../index.html#about">About</a></div></nav></header>
+  <main>
+    <header class="page-head wrap" id="top"><p class="breadcrumbs"><a href="../index.html">Home</a><span>/</span><a href="../index.html#notes">Blog</a><span>/</span><span>WebSocket handshake</span></p><p class="kicker">Blog / Networking</p><h1>What the WebSocket handshake does (and doesn't)</h1><p class="page-lede">A WebSocket connection begins as an HTTP request. The upgrade proves that both endpoints agreed to switch protocols; it does not encrypt the connection, authenticate the user, or make your event payloads safe.</p><div class="page-meta"><span>7 min read</span><span>RFC 6455 · ws · ChatApplication</span><span>Protocol walkthrough</span></div></header>
+    <div class="article-layout wrap">
+      <nav class="toc" aria-label="On this page"><h2>On this page</h2><ol><li><a href="#upgrade">From HTTP to WS</a></li><li><a href="#accept">The accept value</a></li><li><a href="#frames">Frames after upgrade</a></li><li><a href="#security">What the handshake cannot do</a></li><li><a href="#heartbeat">Liveness + reconnect</a></li><li><a href="#project">How ChatApplication uses it</a></li></ol></nav>
+      <article class="prose">
+        <p>HTTP is a request/response protocol. A browser asks for a resource; the server sends a response. WebSocket keeps a connection open so either side can send a frame whenever it has an event. The standard does not start with a brand-new transport: it asks the server to switch the existing HTTP connection.</p>
+        <h2 id="upgrade">The upgrade request is still HTTP</h2>
+        <p>A browser request contains an upgrade intent, a version, and a fresh random key. In an HTTP/1.1 sketch, it looks roughly like this:</p>
+        <pre><code>GET /live HTTP/1.1
+Host: chat.example
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+Origin: https://chat.example</code></pre>
+        <p>If the server accepts, it replies with <code>101 Switching Protocols</code> and the matching <code>Upgrade</code> headers. After that response, both ends exchange WebSocket frames instead of ordinary HTTP message bodies on that connection.</p>
+        <figure class="figure"><p class="figure-title">The handshake / HTTP first, full-duplex frames second</p>
+          <svg viewBox="0 0 900 285" role="img" aria-label="Client sends GET with Upgrade websocket, connection upgrade, key and version. Server checks origin and authentication then returns 101 with accept value. The connection then carries frames in both directions until close.">
+            <defs><marker id="ws-upgrade-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <text x="124" y="25" text-anchor="middle" class="svg-label">Browser</text><text x="774" y="25" text-anchor="middle" class="svg-label">WebSocket server</text><path d="M124 36v226M774 36v226" class="svg-dash"/>
+            <path d="M132 72h634m-7-5 7 5-7 5" class="svg-line"/><text x="449" y="59" text-anchor="middle" class="svg-small">GET + Upgrade + Connection + key + version + Origin</text>
+            <path d="M766 116H132m7-5-7 5 7 5" class="svg-line"/><text x="449" y="103" text-anchor="middle" class="svg-small">101 Switching Protocols + Sec-WebSocket-Accept</text>
+            <path d="M132 158h634m-7-5 7 5-7 5" class="svg-dash"/><path d="M766 189H132m7-5-7 5 7 5" class="svg-dash"/><text x="449" y="174" text-anchor="middle" class="svg-label">WebSocket data frames in either direction</text>
+            <path d="M132 226h634m-7-5 7 5-7 5" class="svg-line"/><text x="449" y="250" text-anchor="middle" class="svg-small">Close control frame → connection ends</text>
+          </svg>
+          <figcaption>The upgrade is a protocol negotiation, not a separate login step. The server should make its authentication and origin decisions before accepting the long-lived connection.</figcaption>
+        </figure>
+
+        <h2 id="accept">The key calculation is a protocol check, not a secret</h2>
+        <p>The server computes <code>Sec-WebSocket-Accept</code> from the client's key plus a fixed GUID, hashes that value with SHA-1, then Base64-encodes the digest. The client can compute the same answer and verify the server understood the WebSocket handshake.</p>
+        <pre><code>accept = Base64(SHA1(clientKey + websocketGuid))</code></pre>
+        <section class="micro-lab" id="ws-calculator" aria-labelledby="ws-calculator-title">
+          <div class="lab-heading"><p class="small-label" id="ws-calculator-title">Try the handshake calculation</p><span class="lab-tag">RFC 6455</span></div>
+          <label class="field-label" for="ws-key">Sec-WebSocket-Key</label>
+          <div class="field-row"><input id="ws-key" type="text" spellcheck="false" autocomplete="off" value="dGhlIHNhbXBsZSBub25jZQ=="><button class="quiet-button" id="ws-compute" type="button">Compute Accept</button></div>
+          <dl class="calc-output"><div><dt>Exact SHA-1 input</dt><dd><code id="ws-concat">Enter a key to compute.</code></dd></div><div><dt>Sec-WebSocket-Accept</dt><dd><code id="ws-accept" aria-live="polite">—</code></dd></div></dl>
+          <p class="lab-status" id="ws-calc-status" role="status">The sample key should produce <code>s3pPLMBiTxaQ9kYGzzhZRbK+xOo=</code>.</p>
+        </section>
+        <p>The client key is public in the request; it is not a password. The accept value prevents a server from mistakenly treating a non-WebSocket HTTP endpoint as an upgraded socket. It is <strong>not encryption</strong>, <strong>not authentication</strong>, and <strong>not authorization</strong>. Use <code>wss://</code> for TLS encryption, and authenticate the user separately.</p>
+        <figure class="figure"><p class="figure-title">Handshake validation / what each part contributes</p>
+          <svg viewBox="0 0 900 255" role="img" aria-label="Client random key plus fixed GUID is hashed and base64 encoded by server to produce accept response. This confirms protocol agreement but carries no secret and does not prove user identity.">
+            <defs><marker id="ws-key-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <rect x="24" y="54" width="205" height="75" rx="4" class="svg-node"/><rect x="348" y="54" width="205" height="75" rx="4" class="svg-node"/><rect x="672" y="54" width="205" height="75" rx="4" class="svg-node-dark"/>
+            <text x="126" y="83" text-anchor="middle" class="svg-label">Client key</text><text x="126" y="106" text-anchor="middle" class="svg-small">random public nonce</text><text x="450" y="83" text-anchor="middle" class="svg-label">SHA-1 + Base64</text><text x="450" y="106" text-anchor="middle" class="svg-small">fixed GUID appended</text><text x="774" y="83" text-anchor="middle" class="svg-label">Accept value</text><text x="774" y="106" text-anchor="middle" class="svg-small">same computed result</text>
+            <path d="M232 91h108m-7-5 7 5-7 5M556 91h108m-7-5 7 5-7 5" class="svg-line"/>
+            <path d="M775 145v50H126v-56m-5 7 5-7 5 7" class="svg-dash"/><text x="450" y="220" text-anchor="middle" class="svg-small">Verifies protocol agreement only. TLS and application auth are separate.</text>
+          </svg>
+        </figure>
+
+        <h2 id="frames">After upgrade, it is frames—not raw JSON strings</h2>
+        <p>WebSocket frames have a header, a payload length, and optional masking. The base header contains a final-frame bit, reserved bits for negotiated extensions, an opcode, a mask bit, and a payload length. Text and binary messages may be fragmented into multiple frames; control frames such as ping, pong, and close have special rules. A browser client masks frames it sends to the server; a server does not mask its frames.</p>
+        <figure class="figure"><p class="figure-title">Frame header / simplified layout</p>
+          <svg viewBox="0 0 920 260" role="img" aria-label="WebSocket frame begins with FIN, RSV1 to RSV3 and opcode bits, then MASK bit and payload length; optional 4-byte mask key and payload follow. Browser-to-server frames are masked.">
+            <rect x="25" y="66" width="89" height="75" class="svg-node"/><rect x="114" y="66" width="120" height="75" class="svg-node"/><rect x="234" y="66" width="89" height="75" class="svg-node"/><rect x="323" y="66" width="151" height="75" class="svg-node"/><rect x="474" y="66" width="157" height="75" class="svg-node-dark"/><rect x="631" y="66" width="264" height="75" class="svg-node"/>
+            <text x="69" y="96" text-anchor="middle" class="svg-label">FIN</text><text x="69" y="119" text-anchor="middle" class="svg-small">1 bit</text><text x="174" y="96" text-anchor="middle" class="svg-label">RSV1–3</text><text x="174" y="119" text-anchor="middle" class="svg-small">extensions</text><text x="278" y="96" text-anchor="middle" class="svg-label">Opcode</text><text x="278" y="119" text-anchor="middle" class="svg-small">message/control</text><text x="398" y="96" text-anchor="middle" class="svg-label">MASK + length</text><text x="398" y="119" text-anchor="middle" class="svg-small">7 / 16 / 64 bits</text><text x="552" y="96" text-anchor="middle" class="svg-label">Mask key</text><text x="552" y="119" text-anchor="middle" class="svg-small">4 bytes if masked</text><text x="763" y="96" text-anchor="middle" class="svg-label">Payload</text><text x="763" y="119" text-anchor="middle" class="svg-small">bytes / text / control data</text>
+            <path d="M25 161h449v39H25Z" class="svg-node-dark"/><text x="250" y="186" text-anchor="middle" class="svg-small">client → server: mask bit set, payload XOR-masked</text><path d="M475 161h420v39H475Z" class="svg-node"/><text x="685" y="186" text-anchor="middle" class="svg-small">server → client: unmasked payload</text>
+            <text x="460" y="235" text-anchor="middle" class="svg-mono">Frame boundaries ≠ application event boundaries; decode and validate your message format.</text>
+          </svg>
+          <figcaption>The browser exposes message events, not raw frame manipulation. This diagram leaves out extended headers and fragmentation details, but shows the fields that shape how a frame is read.</figcaption>
+        </figure>
+
+        <h2 id="security">What the handshake cannot do for you</h2>
+        <ul><li><strong>It does not authenticate.</strong> A WebSocket is still an application connection. Check a signed session/token on connect and authorize every action.</li><li><strong>It does not make the origin trustworthy.</strong> Browsers send an <code>Origin</code> header. Validate it against an explicit allow-list, especially when cookies authenticate the socket, to reduce cross-site WebSocket hijacking risk.</li><li><strong>It does not encrypt.</strong> Use <code>wss://</code> so the transport is protected by TLS. The accept hash is not a security secret.</li><li><strong>It does not validate events.</strong> Limit payload size, parse safely, validate message types and fields, and verify the user may act on the target conversation or message.</li><li><strong>It does not make delivery durable.</strong> If a connection closes, a frame that was in flight may be lost from the client's perspective. Persist state and provide a catch-up path.</li></ul>
+
+        <h2 id="heartbeat">Liveness needs a deadline and a recovery path</h2>
+        <p>TCP may remain open while one side is no longer useful. Ping/pong control frames help endpoints notice a dead peer. The browser's WebSocket API handles protocol-level ping/pong without exposing a method to send a control ping from JavaScript, so applications sometimes add their own JSON heartbeat as well.</p>
+        <p>In ChatApplication, the server sends a protocol ping about every 30 seconds and marks the connection dead if the previous ping did not receive a pong. The client also sends an application-level ping after about 40 seconds without a server event; the server replies with JSON pong, and the client closes a quiet connection after the next check at roughly 45 seconds. The frontend reconnects after closure and refreshes online state. The two heartbeat mechanisms are separate; changing one requires checking the other.</p>
+        <figure class="figure"><p class="figure-title">Heartbeat / transport liveness vs. application liveness</p>
+          <svg viewBox="0 0 900 300" role="img" aria-label="Server sends WebSocket protocol ping every 30 seconds and expects pong. Separately, client sends JSON application ping after 40 seconds without events and expects JSON pong, then closes if no event by about 45 seconds. On close, frontend reconnects.">
+            <text x="123" y="26" text-anchor="middle" class="svg-label">Browser</text><text x="775" y="26" text-anchor="middle" class="svg-label">Server</text><path d="M123 38v239M775 38v239" class="svg-dash"/>
+            <path d="M767 76H131m7-5-7 5 7 5" class="svg-line"/><text x="448" y="67" text-anchor="middle" class="svg-small">control ping about every 30 s</text><path d="M131 111h636m-7-5 7 5-7 5" class="svg-line"/><text x="448" y="103" text-anchor="middle" class="svg-small">automatic protocol pong</text>
+            <path d="M131 164h636m-7-5 7 5-7 5" class="svg-dash"/><text x="448" y="156" text-anchor="middle" class="svg-small">application JSON ping after ~40 s without events</text><path d="M767 199H131m7-5-7 5 7 5" class="svg-dash"/><text x="448" y="191" text-anchor="middle" class="svg-small">application JSON pong</text>
+            <rect x="42" y="226" width="819" height="46" rx="4" class="svg-node-dark"/><text x="451" y="246" text-anchor="middle" class="svg-small">if heartbeat times out → close / reconnect → reload presence + missed messages</text><text x="451" y="263" text-anchor="middle" class="svg-mono">A heartbeat detects silence; it does not replay lost application data.</text>
+          </svg>
+          <figcaption>The timings above describe the checked-in client and server loops; they are not protocol defaults.</figcaption>
+        </figure>
+
+        <h2 id="project">How this fits the chat project</h2>
+        <p>The backend creates a <code>WebSocketServer</code> on the same HTTP server. At connection time, it checks Origin, reads the session cookie, verifies the JWT, and confirms that token is still in the user's session list. It keeps sockets in a per-user map, then emits typed JSON events for new messages, presence, typing, chat requests, reactions, edits, and receipts. The service persists messages through REST before it pushes a new-message event.</p>
+        <p>This is why a raw WebSocket library is enough for the current project: it owns its event format, reconnection, and presence rules. A higher-level library can add rooms, fallbacks, acknowledgements, and reconnection helpers, but those are product choices. They do not remove the need to define what each event means or how it recovers after a disconnect.</p>
+        <div class="callout"><p class="small-label">A practical reading rule</p><p>When you see “WebSocket is connected,” read that as “there is a transport right now.” Ask separate questions for identity, permission, persistence, acknowledgement, and replay.</p></div>
+        <h2 id="sources">Reference</h2><ul class="source-list"><li><a href="https://www.rfc-editor.org/rfc/rfc6455.html" target="_blank" rel="noopener noreferrer">RFC 6455 — The WebSocket Protocol</a></li></ul>
+        <div class="about-links"><a class="button" href="../projects/chatapplication.html">ChatApplication architecture ↗</a><a class="text-link" href="message-lifecycle.html">Message lifecycle</a></div>
+        <div class="next-links"><a href="message-lifecycle.html">← Message lifecycle</a><a href="../index.html#notes">All posts →</a></div>
+      </article>
+    </div>
+  </main>
+  <footer class="site-footer wrap"><div class="footer-row"><span>© <span id="year">2026</span> Babin</span><span class="footer-links"><a href="#top">Back to top ↑</a><button class="buddy-toggle utility-toggle" id="grid-toggle" type="button" aria-pressed="false">Grid: off</button><button class="buddy-toggle utility-toggle" id="shortcuts-toggle" type="button" aria-haspopup="dialog">Keys ?</button><button class="buddy-toggle" id="sound-toggle" type="button" aria-pressed="false" aria-label="Turn meow sounds on">Meow: off</button><button class="buddy-toggle" id="pip-toggle" hidden type="button" aria-pressed="true">Pip on</button></span></div></footer><script src="../assets/js/site.js"></script>
+</body></html>

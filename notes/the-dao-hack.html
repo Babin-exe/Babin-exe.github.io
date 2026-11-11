@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#e7e6e2"><meta name="description" content="A technical walkthrough of the 2016 DAO reentrancy exploit, the community's fork response, and the contract design lessons that followed."><title>The DAO hack: one callback too early — Babin</title><link rel="stylesheet" href="../assets/css/site.css"></head>
+<body>
+  <div class="reading-progress" aria-hidden="true"></div>
+  <header class="site-header"><nav class="nav wrap" aria-label="Main navigation"><a class="brand" href="../index.html"><svg class="brand-avatar" viewBox="0 0 48 48" aria-hidden="true" focusable="false"><g class="avatar-head"><path d="M8.5 20 7 6l12 7c3-1.5 7-1.5 10 0l12-7-1.5 14" fill="#d4d3ce" stroke="#5e5e59" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 22c0-7 5-11 12-11h8c7 0 12 4 12 11v7c0 7-5 12-12 12h-8C13 41 8 36 8 29z" fill="#eeede9" stroke="#5e5e59" stroke-width="1.6"/><path d="m11 16-1-7 6 4m21 3 1-7-6 4" fill="#c5c4be" stroke="#5e5e59" stroke-width="1.1" stroke-linejoin="round"/><g class="avatar-pupils"><ellipse cx="18.5" cy="24" rx="1.35" ry="2" fill="#292927"/><ellipse cx="29.5" cy="24" rx="1.35" ry="2" fill="#292927"/></g><path d="m21.5 29 2.5 2 2.5-2m-2.5 2v2m0 0c-1.5 2-3.5 2.5-5 1m5-1c1.5 2 3.5 2.5 5 1M14 30l-6-2m6 5-6 1m20-4 6-2m-6 5 6 1" fill="none" stroke="#5e5e59" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></g></svg></a><div class="nav-links"><a href="../index.html#projects">Projects</a><a href="../index.html#notes">Blog</a><a href="../index.html#tools">Tools</a><a href="../index.html#about">About</a></div></nav></header>
+  <main>
+    <header class="page-head wrap" id="top"><p class="breadcrumbs"><a href="../index.html">Home</a><span>/</span><a href="../index.html#notes">Blog</a><span>/</span><span>The DAO</span></p><p class="kicker">Blog / Smart-contract history</p><h1>The DAO hack: one callback too early</h1><p class="page-lede">The 2016 DAO exploit is a useful case study because the failure was not a broken hash or a stolen key. A contract gave control to another contract before updating its own accounting—and the callback came back in while the old balance was still visible.</p><div class="page-meta"><span>8 min read</span><span>Ethereum · reentrancy · design</span><span>History and mechanism</span></div></header>
+    <div class="article-layout wrap">
+      <nav class="toc" aria-label="On this page"><h2>On this page</h2><ol><li><a href="#context">The context</a></li><li><a href="#mechanism">The reentrant call</a></li><li><a href="#ordering">Why order matters</a></li><li><a href="#response">What the fork changed</a></li><li><a href="#lessons">What still applies</a></li><li><a href="#sources">Primary sources</a></li></ol></nav>
+      <article class="prose">
+        <p>In 2016, The DAO was a large Ethereum-based investment organization whose contract let participants withdraw their share by “splitting” into a child DAO. On June 17, the Ethereum Foundation described an active exploit: the attacker called the split operation and recursively called it again from inside that operation, collecting Ether multiple times in one transaction. More than 3.6 million ETH was moved into a child DAO. The child DAO's waiting period meant that the funds were not immediately withdrawable. <a href="https://blog.ethereum.org/2016/06/17/critical-update-re-dao-vulnerability" target="_blank" rel="noopener noreferrer">The Foundation's incident update</a> describes the recursion; <a href="https://eips.ethereum.org/EIPS/eip-779" target="_blank" rel="noopener noreferrer">EIP-779</a> records the later fork's state change.</p>
+        <div class="callout"><p class="small-label">A distinction worth keeping</p><p>This was a vulnerability in a particular smart contract and its interaction logic. It was not a break of Ethereum's cryptographic signatures or consensus protocol. The chain executed the contract's code; the design mistake was in what that code allowed callers to do.</p></div>
+
+        <h2 id="context">The context: “withdraw my share” crosses a trust boundary</h2>
+        <p>A contract can call another contract. That call is not a passive transfer of bytes: the receiving contract can run code before the original call returns. If the original contract has not finished updating its own state, the receiver can call back into it while its accounting is halfway through a withdrawal.</p>
+        <p>The simplified example below is not The DAO's source code. It only shows the dangerous ordering in generic withdrawal logic: calculate a payout, make an external call, then reduce the recorded balance.</p>
+        <pre><code>// Unsafe ordering (simplified)
+function withdraw() {
+    amount = credit[msg.sender];
+    sendEther(msg.sender, amount);  // recipient code may run here
+    credit[msg.sender] = 0;         // too late if callback re-enters
+}</code></pre>
+        <p>If the recipient is a contract, the payment call can trigger its fallback/receive code. If that code calls <code>withdraw()</code> again, the outer invocation has not yet set the credit to zero. The nested invocation sees the same entitlement and performs another payment. The bug is a control-flow issue: execution leaves the contract before its state has reached a safe point.</p>
+
+        <h2 id="mechanism">The reentrant call, one stack frame at a time</h2>
+        <figure class="figure"><p class="figure-title">Call sequence / stale accounting becomes a repeated payout</p>
+          <svg viewBox="0 0 920 390" role="img" aria-label="Attacker contract calls DAO split. DAO begins withdrawal and calls child DAO before updating accounting. Attacker fallback calls split again. DAO sees the old state and repeats payout. Recursive calls unwind only after repeated effects.">
+            <defs><marker id="dao-flow-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <text x="142" y="27" text-anchor="middle" class="svg-label">Attacker contract</text><text x="456" y="27" text-anchor="middle" class="svg-label">DAO contract</text><text x="778" y="27" text-anchor="middle" class="svg-label">Child DAO / receiver</text>
+            <path d="M142 38v329M456 38v329M778 38v329" class="svg-dash"/>
+            <path d="M150 73h298m-7-5 7 5-7 5" class="svg-line"/><text x="301" y="65" text-anchor="middle" class="svg-small">call split / withdraw</text>
+            <path d="M464 112h306m-7-5 7 5-7 5" class="svg-line"/><text x="616" y="104" text-anchor="middle" class="svg-small">external value call before bookkeeping update</text>
+            <path d="M770 151 150 151m7-5-7 5 7 5" class="svg-dash"/><text x="460" y="143" text-anchor="middle" class="svg-small">receiver callback → re-enter split</text>
+            <path d="M150 189h298m-7-5 7 5-7 5" class="svg-line"/><text x="301" y="181" text-anchor="middle" class="svg-small">nested call sees previous credit / state</text>
+            <path d="M464 228h306m-7-5 7 5-7 5" class="svg-line"/><text x="616" y="220" text-anchor="middle" class="svg-small">another payout before outer call returns</text>
+            <path d="M770 267H464m7-5-7 5 7 5" class="svg-dash"/><text x="616" y="259" text-anchor="middle" class="svg-small">callback can repeat while state is stale</text>
+            <rect x="60" y="301" width="800" height="52" rx="4" class="svg-node-dark"/><text x="460" y="323" text-anchor="middle" class="svg-label">The vulnerable interval</text><text x="460" y="342" text-anchor="middle" class="svg-small">external code is running, but the contract has not recorded that this withdrawal is already in progress</text>
+          </svg>
+          <figcaption>Reentrancy is not “the same function runs twice by accident.” It is a deliberate callback into an unfinished state transition.</figcaption>
+        </figure>
+        <p>The DAO's split path was the vulnerable operation. It could call into the destination DAO while the original split/accounting path was still active; the recursive call reused state that had not yet been fully updated. The exploit drained value into a child DAO under the contract's split mechanism, rather than reversing blocks or forging transactions.</p>
+
+        <section class="micro-lab" id="dao-simulator" aria-labelledby="dao-simulator-title">
+          <div class="lab-heading"><p class="small-label" id="dao-simulator-title">Scrub the call stack</p><span class="lab-tag">Teaching model · not DAO source code</span></div>
+          <label class="field-label" for="dao-step">Call sequence <output id="dao-step-label" for="dao-step">1 / 4</output></label>
+          <input class="range-input" id="dao-step" type="range" min="1" max="4" step="1" value="1">
+          <div class="dao-sim-grid"><div><p class="small-label">EVM call stack</p><div class="call-stack" id="dao-stack" aria-label="Call stack at this step"></div></div><div class="dao-ledger"><p class="small-label">Toy account ledger</p><p>Recorded credit <strong id="dao-credit">10 ETH</strong></p><p>Ether sent <strong id="dao-paid">0 ETH</strong></p></div></div>
+          <h3 class="sim-step-title" id="dao-step-title">1 · The attacker calls withdraw()</h3>
+          <p class="lab-status" id="dao-step-copy" aria-live="polite">The contract starts with a 10 ETH credit. One withdrawal frame is active.</p>
+        </section>
+
+        <h2 id="ordering">The fix starts with ordering</h2>
+        <p>The standard Checks–Effects–Interactions pattern is a useful first defense:</p>
+        <ol><li><strong>Checks:</strong> verify caller, arguments, and available balance.</li><li><strong>Effects:</strong> update internal accounting so the entitlement is consumed.</li><li><strong>Interactions:</strong> only then call an external contract or transfer value.</li></ol>
+        <pre><code>// Safer ordering (simplified; not production code)
+function withdraw() {
+    amount = credit[msg.sender];
+    require(amount &gt; 0);
+    credit[msg.sender] = 0;         // effect first
+    sendEther(msg.sender, amount);  // interaction last
+}</code></pre>
+        <figure class="figure"><p class="figure-title">Safe ordering / close the reentry window before calling out</p>
+          <svg viewBox="0 0 920 250" role="img" aria-label="Checks verify balance and caller, effects update or zero the claim before any external interaction, then payout is sent; a callback now sees no remaining credit">
+            <defs><marker id="dao-safe-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker></defs>
+            <rect x="26" y="58" width="206" height="79" rx="4" class="svg-node"/><rect x="357" y="58" width="206" height="79" rx="4" class="svg-node"/><rect x="688" y="58" width="206" height="79" rx="4" class="svg-node"/>
+            <text x="129" y="88" text-anchor="middle" class="svg-label">1. Checks</text><text x="129" y="111" text-anchor="middle" class="svg-small">caller + credit valid</text><text x="460" y="88" text-anchor="middle" class="svg-label">2. Effects</text><text x="460" y="111" text-anchor="middle" class="svg-small">consume claim / update state</text><text x="791" y="88" text-anchor="middle" class="svg-label">3. Interaction</text><text x="791" y="111" text-anchor="middle" class="svg-small">call recipient contract</text>
+            <path d="M235 98h115m-7-5 7 5-7 5M566 98h115m-7-5 7 5-7 5" class="svg-line"/>
+            <path d="M790 145v54H460v-58m-5 7 5-7 5 7" class="svg-dash"/><text x="624" y="221" text-anchor="middle" class="svg-small">reentry now sees updated state and cannot claim the same balance again</text>
+          </svg>
+          <figcaption>The ordering protects the accounting invariant before control leaves the contract. It should be combined with careful external-call design and tests.</figcaption>
+        </figure>
+        <p>Other defenses include pull payments, where a recipient withdraws separately, and a reentrancy guard that prevents nested entry into sensitive functions. These help, but neither replaces understanding which state must change and which functions share that state. Reentrancy can cross function boundaries or involve a chain of contracts, not just recurse into the same line of code.</p>
+        <div class="callout"><p class="small-label">Do not rely on a tiny gas stipend</p><p>Modern smart-contract guidance recommends ordering state updates before external calls and using explicit guards where appropriate. A fixed gas stipend is not a complete security model; opcode pricing and call behavior can change, and external calls remain a control-transfer boundary.</p></div>
+
+        <h2 id="response">The community response: a contentious fork</h2>
+        <p>The response became a governance question as much as a technical one. The Foundation initially proposed a software fork that would prevent withdrawals from The DAO and its child DAOs during the lock period; the June 17 statement explicitly said that this was not a rollback of blocks. After debate and a vote, the hard fork activated at block 1,920,000 on July 20, 2016. EIP-779 describes it as an “irregular state change”: balances from a specified set of DAO-related accounts moved to a recovery contract where token holders could withdraw.</p>
+        <figure class="figure"><p class="figure-title">Timeline / exploit, debate, fork</p>
+          <svg viewBox="0 0 920 255" role="img" aria-label="June 17 2016 Ethereum Foundation reports active recursive DAO exploit; community debates interventions and whether code is law; July 20 2016 hard fork at block 1920000 moves balances to a withdrawal contract; non-fork chain continues as Ethereum Classic">
+            <path d="M76 121h765" class="svg-line"/><circle cx="107" cy="121" r="8" class="svg-number"/><circle cx="451" cy="121" r="8" class="svg-number"/><circle cx="788" cy="121" r="8" class="svg-number"/>
+            <rect x="28" y="26" width="178" height="70" rx="4" class="svg-node"/><rect x="359" y="26" width="190" height="70" rx="4" class="svg-node"/><rect x="690" y="26" width="198" height="70" rx="4" class="svg-node"/>
+            <text x="117" y="52" text-anchor="middle" class="svg-label">17 Jun 2016</text><text x="117" y="75" text-anchor="middle" class="svg-small">recursive exploit public</text><text x="454" y="52" text-anchor="middle" class="svg-label">June → July</text><text x="454" y="75" text-anchor="middle" class="svg-small">debate over intervention</text><text x="789" y="52" text-anchor="middle" class="svg-label">20 Jul 2016</text><text x="789" y="75" text-anchor="middle" class="svg-small">fork at block 1,920,000</text>
+            <path d="M107 132v41m-5-7 5 7 5-7M451 132v41m-5-7 5 7 5-7M788 132v41m-5-7 5 7 5-7" class="svg-line"/>
+            <text x="117" y="199" text-anchor="middle" class="svg-small">funds moved to a child DAO</text><text x="454" y="199" text-anchor="middle" class="svg-small">immutability vs. recovery</text><text x="789" y="199" text-anchor="middle" class="svg-small">state change on one fork;</text><text x="789" y="218" text-anchor="middle" class="svg-small">the other chain continued</text>
+          </svg>
+          <figcaption>The fork did not erase the attack transaction from history. Nodes that did not adopt it continued the original chain, which became Ethereum Classic.</figcaption>
+        </figure>
+        <p>The hard fork was controversial precisely because the technology question (“what does this bytecode do?”) and the governance question (“should the community intervene?”) were different questions. Ethereum Classic continued on the non-fork chain. The incident became a lasting reminder that immutable execution does not remove social choices; it makes those choices visible and costly. The Foundation's <a href="https://blog.ethereum.org/en/2016/07/20/hard-fork-completed" target="_blank" rel="noopener noreferrer">fork completion notice</a> records the movement at block 1,920,000, while the current <a href="https://docs.soliditylang.org/en/latest/security-considerations.html" target="_blank" rel="noopener noreferrer">Solidity security guidance</a> explains Checks–Effects–Interactions.</p>
+
+        <h2 id="lessons">What still applies to contract design</h2>
+        <ul><li><strong>Model external calls as control transfers.</strong> Any recipient code may run before the caller resumes.</li><li><strong>Write invariants down.</strong> “A claim can be paid at most once” is clearer than “withdraw should work.”</li><li><strong>Update state before interaction.</strong> Use Checks–Effects–Interactions and consider a guard for shared mutable state.</li><li><strong>Use adversarial tests.</strong> Make a receiver contract that re-enters, reverts, consumes gas, and makes nested calls.</li><li><strong>Keep the response plan in mind.</strong> Upgradeability, pause authority, governance, and recovery paths are protocol choices, not afterthoughts.</li><li><strong>Separate a contract exploit from a chain exploit.</strong> In this case, the EVM ran the contract as programmed; the vulnerability was the contract's state-transition design.</li></ul>
+        <p>The DAO incident matters because a small ordering mistake sat at the intersection of code, money, and governance. The mechanics fit in a short call graph. The consequences did not.</p>
+        <h2 id="sources">Primary sources</h2>
+        <ul class="source-list"><li><a href="https://blog.ethereum.org/2016/06/17/critical-update-re-dao-vulnerability" target="_blank" rel="noopener noreferrer">Ethereum Foundation, “Critical Update Re: DAO Vulnerability” (17 June 2016)</a></li><li><a href="https://eips.ethereum.org/EIPS/eip-779" target="_blank" rel="noopener noreferrer">EIP-779 — DAO Fork specification</a></li><li><a href="https://blog.ethereum.org/en/2016/07/20/hard-fork-completed" target="_blank" rel="noopener noreferrer">Ethereum Foundation, “Hard Fork Completed” (20 July 2016)</a></li><li><a href="https://docs.soliditylang.org/en/latest/security-considerations.html" target="_blank" rel="noopener noreferrer">Solidity documentation — Security Considerations</a></li></ul>
+        <div class="next-links"><a href="dynamic-programming.html">← Previous: Dynamic programming</a><a href="../index.html#notes">All posts →</a></div>
+      </article>
+    </div>
+  </main>
+  <footer class="site-footer wrap"><div class="footer-row"><span>© <span id="year">2026</span> Babin</span><span class="footer-links"><a href="#top">Back to top ↑</a><button class="buddy-toggle utility-toggle" id="grid-toggle" type="button" aria-pressed="false">Grid: off</button><button class="buddy-toggle utility-toggle" id="shortcuts-toggle" type="button" aria-haspopup="dialog">Keys ?</button><button class="buddy-toggle" id="sound-toggle" type="button" aria-pressed="false" aria-label="Turn meow sounds on">Meow: off</button><button class="buddy-toggle" id="pip-toggle" hidden type="button" aria-pressed="true">Pip on</button></span></div></footer><script src="../assets/js/site.js"></script>
+</body></html>
