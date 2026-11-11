@@ -35,24 +35,37 @@
   const soundToggle = document.getElementById('sound-toggle');
   if (soundToggle) {
     const soundPreference = 'babin-meow-sound';
-    let meowEnabled = false;
+    let soundEnabled = false;
     let audioContext;
     let soundBusy = false;
-    const activeMeows = new Set();
+    let releaseTimer = 0;
+    const activeBeeps = new Set();
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     try {
-      meowEnabled = window.localStorage.getItem(soundPreference) === 'on';
+      soundEnabled = window.localStorage.getItem(soundPreference) === 'on';
     } catch (_) {}
 
     const updateSoundToggle = () => {
-      soundToggle.textContent = meowEnabled ? 'Meow: on' : 'Meow: off';
-      soundToggle.setAttribute('aria-pressed', String(meowEnabled));
-      soundToggle.setAttribute('aria-label', meowEnabled ? 'Turn meow sounds off' : 'Turn meow sounds on');
+      soundToggle.textContent = soundEnabled ? 'Beep: on' : 'Beep: off';
+      soundToggle.setAttribute('aria-pressed', String(soundEnabled));
+      soundToggle.setAttribute('aria-label', soundEnabled ? 'Turn beep sounds off' : 'Turn beep sounds on');
     };
     updateSoundToggle();
 
-    const playMeow = () => {
-      if (!meowEnabled || !pipEnabled || !AudioContextClass || soundBusy) return;
+    const stopBeep = () => {
+      window.clearTimeout(releaseTimer);
+      releaseTimer = 0;
+      activeBeeps.forEach((tone) => {
+        tone.oscillator.onended = null;
+        try { tone.oscillator.stop(); } catch (_) {}
+        try { tone.oscillator.disconnect(); } catch (_) {}
+        try { tone.envelope.disconnect(); } catch (_) {}
+      });
+      activeBeeps.clear();
+      soundBusy = false;
+    };
+    const playBeep = () => {
+      if (!soundEnabled || !pipEnabled || !AudioContextClass || soundBusy) return;
       soundBusy = true;
       try {
         if (!audioContext) audioContext = new AudioContextClass();
@@ -62,129 +75,56 @@
       }
 
       const context = audioContext;
-      const startVoice = () => {
-        if (!meowEnabled || !pipEnabled) { soundBusy = false; return; }
-        const now = context.currentTime;
-        const voice = context.createOscillator();
-        const mewFormant = context.createBiquadFilter();
-        const openFormant = context.createBiquadFilter();
-        const mewLevel = context.createGain();
-        const openLevel = context.createGain();
-        const envelope = context.createGain();
-
-        voice.type = 'triangle';
-        voice.frequency.setValueAtTime(295, now);
-        voice.frequency.linearRampToValueAtTime(455, now + 0.12);
-        voice.frequency.linearRampToValueAtTime(245, now + 0.5);
-        mewFormant.type = 'bandpass';
-        mewFormant.Q.value = 1.7;
-        mewFormant.frequency.setValueAtTime(560, now);
-        mewFormant.frequency.linearRampToValueAtTime(830, now + 0.12);
-        mewFormant.frequency.linearRampToValueAtTime(610, now + 0.5);
-        openFormant.type = 'bandpass';
-        openFormant.Q.value = 2;
-        openFormant.frequency.setValueAtTime(1750, now);
-        openFormant.frequency.linearRampToValueAtTime(2050, now + 0.1);
-        openFormant.frequency.linearRampToValueAtTime(780, now + 0.5);
-        mewLevel.gain.value = 0.75;
-        openLevel.gain.value = 0.25;
-        envelope.gain.setValueAtTime(0.0001, now);
-        envelope.gain.linearRampToValueAtTime(0.032, now + 0.045);
-        envelope.gain.setValueAtTime(0.026, now + 0.18);
-        envelope.gain.exponentialRampToValueAtTime(0.0001, now + 0.51);
-
-        voice.connect(mewFormant);
-        voice.connect(openFormant);
-        mewFormant.connect(mewLevel).connect(envelope);
-        openFormant.connect(openLevel).connect(envelope);
-        envelope.connect(context.destination);
-        activeMeows.add(voice);
-        voice.onended = () => {
+      const startPair = () => {
+        if (!soundEnabled || !pipEnabled) { soundBusy = false; return; }
+        const start = context.currentTime;
+        [660, 880].forEach((frequency, index) => {
+          const beginsAt = start + index * 0.16;
+          const oscillator = context.createOscillator();
+          const envelope = context.createGain();
+          oscillator.type = 'sine';
+          oscillator.frequency.setValueAtTime(frequency, beginsAt);
+          envelope.gain.setValueAtTime(0.0001, beginsAt);
+          envelope.gain.linearRampToValueAtTime(0.028, beginsAt + 0.012);
+          envelope.gain.setValueAtTime(0.028, beginsAt + 0.075);
+          envelope.gain.exponentialRampToValueAtTime(0.0001, beginsAt + 0.105);
+          oscillator.connect(envelope).connect(context.destination);
+          const tone = { oscillator, envelope };
+          activeBeeps.add(tone);
+          oscillator.onended = () => {
+            activeBeeps.delete(tone);
+            oscillator.disconnect();
+            envelope.disconnect();
+          };
+          oscillator.start(beginsAt);
+          oscillator.stop(beginsAt + 0.11);
+        });
+        releaseTimer = window.setTimeout(() => {
           soundBusy = false;
-          activeMeows.delete(voice);
-          voice.disconnect();
-          mewFormant.disconnect();
-          openFormant.disconnect();
-          mewLevel.disconnect();
-          openLevel.disconnect();
-          envelope.disconnect();
-        };
-        voice.start(now);
-        voice.stop(now + 0.52);
+          releaseTimer = 0;
+        }, 330);
       };
 
-      if (context.state === 'suspended') context.resume().then(startVoice).catch(() => { soundBusy = false; });
-      else startVoice();
+      if (context.state === 'suspended') context.resume().then(startPair).catch(() => { soundBusy = false; });
+      else startPair();
     };
 
-    const playPurr = () => {
-      if (!meowEnabled || !pipEnabled || !AudioContextClass || soundBusy) return;
-      soundBusy = true;
-      try {
-        if (!audioContext) audioContext = new AudioContextClass();
-      } catch (_) {
-        soundBusy = false;
-        return;
-      }
-      const context = audioContext;
-      const startPurr = () => {
-        if (!meowEnabled || !pipEnabled) { soundBusy = false; return; }
-        const now = context.currentTime;
-        const voice = context.createOscillator();
-        const lfo = context.createOscillator();
-        const filter = context.createBiquadFilter();
-        const tremolo = context.createGain();
-        const envelope = context.createGain();
-        voice.type = 'triangle';
-        voice.frequency.value = 72;
-        lfo.type = 'sine';
-        lfo.frequency.value = 24;
-        filter.type = 'lowpass';
-        filter.frequency.value = 210;
-        tremolo.gain.value = 0.003;
-        envelope.gain.setValueAtTime(0.0001, now);
-        envelope.gain.linearRampToValueAtTime(0.012, now + 0.035);
-        envelope.gain.setValueAtTime(0.01, now + 0.19);
-        envelope.gain.exponentialRampToValueAtTime(0.0001, now + 0.34);
-        voice.connect(filter).connect(envelope).connect(context.destination);
-        lfo.connect(tremolo).connect(envelope.gain);
-        activeMeows.add(voice);
-        voice.onended = () => {
-          soundBusy = false;
-          activeMeows.delete(voice);
-          voice.disconnect();
-          lfo.disconnect();
-          filter.disconnect();
-          tremolo.disconnect();
-          envelope.disconnect();
-        };
-        voice.start(now);
-        lfo.start(now);
-        voice.stop(now + 0.35);
-        lfo.stop(now + 0.35);
-      };
-      if (context.state === 'suspended') context.resume().then(startPurr).catch(() => { soundBusy = false; });
-      else startPurr();
-    };
-
-    window.addEventListener('pip:pet', playPurr);
+    window.addEventListener('pip:pet', playBeep);
+    const soundPipToggle = document.getElementById('pip-toggle');
+    soundPipToggle?.addEventListener('click', () => { if (pipEnabled) stopBeep(); });
 
     soundToggle.addEventListener('click', () => {
-      meowEnabled = !meowEnabled;
+      soundEnabled = !soundEnabled;
       try {
-        window.localStorage.setItem(soundPreference, meowEnabled ? 'on' : 'off');
+        window.localStorage.setItem(soundPreference, soundEnabled ? 'on' : 'off');
       } catch (_) {}
       updateSoundToggle();
-      if (!meowEnabled) {
-        activeMeows.forEach((voice) => {
-          try { voice.stop(); } catch (_) {}
-        });
-      }
+      if (!soundEnabled) stopBeep();
     });
 
     document.addEventListener('click', (event) => {
       if (!pipEnabled || event.detail === 0 || soundToggle.contains(event.target) || event.target.closest?.('.buddy') || event.target.closest?.('.pip-pet-button')) return;
-      playMeow();
+      playBeep();
     });
   }
 
@@ -301,7 +241,7 @@
       searchInput.focus();
     };
 
-    const shortcuts = makeDialog('shortcuts-dialog', 'A few quick keys', '<dl class="shortcut-list"><dt>⌘ K / Ctrl K</dt><dd>Search every project and note</dd><dt>j / k</dt><dd>Move through sections on this page</dd><dt>p</dt><dd>Turn Pip on or off</dd><dt>t</dt><dd>Toggle the drafting grid</dd><dt>?</dt><dd>Show or hide this card</dd><dt>Esc</dt><dd>Close the open panel</dd></dl>');
+    const shortcuts = makeDialog('shortcuts-dialog', 'A few quick keys', '<dl class="shortcut-list"><dt>⌘ K / Ctrl K</dt><dd>Search every project and note</dd><dt>j / k</dt><dd>Move through sections on this page</dd><dt>p</dt><dd>Turn Bonish on or off</dd><dt>t</dt><dd>Toggle the drafting grid</dd><dt>?</dt><dd>Show or hide this card</dd><dt>Esc</dt><dd>Close the open panel</dd></dl>');
     const shortcutsToggle = document.getElementById('shortcuts-toggle');
     if (shortcutsToggle) shortcutsToggle.addEventListener('click', () => shortcuts.showModal());
 
@@ -721,7 +661,7 @@
   const petButton = document.createElement('button');
   petButton.className = 'buddy-toggle pip-pet-button';
   petButton.type = 'button';
-  petButton.textContent = 'Pet Pip';
+  petButton.textContent = 'Pet Bonish';
   petButton.disabled = !enabled;
   const petCounter = document.createElement('span');
   petCounter.className = 'pip-pet-count';
@@ -729,8 +669,8 @@
   petCounter.setAttribute('aria-live', 'polite');
   toggle.after(petButton, petCounter);
   const updatePetCount = () => {
-    petCounter.textContent = petCount ? `Pip petted ${petCount} ${petCount === 1 ? 'time' : 'times'}` : '';
-    petButton.setAttribute('aria-label', `Pet Pip${petCount ? `; petted ${petCount} ${petCount === 1 ? 'time' : 'times'}` : ''}`);
+    petCounter.textContent = petCount ? `Bonish petted ${petCount} ${petCount === 1 ? 'time' : 'times'}` : '';
+    petButton.setAttribute('aria-label', `Pet Bonish${petCount ? `; petted ${petCount} ${petCount === 1 ? 'time' : 'times'}` : ''}`);
   };
   updatePetCount();
   const scheduleNap = () => {
@@ -833,7 +773,7 @@
     toggle.hidden = true;
   }
 
-  toggle.textContent = enabled ? 'Pip on' : 'Pip off';
+  toggle.textContent = enabled ? 'Bonish on' : 'Bonish off';
   toggle.setAttribute('aria-pressed', String(enabled));
   scheduleNap();
   toggle.addEventListener('click', () => {
@@ -841,7 +781,7 @@
     pipEnabled = enabled;
     try { window.localStorage.setItem('babin-pip-enabled', enabled ? 'on' : 'off'); } catch (_) {}
     petButton.disabled = !enabled;
-    toggle.textContent = enabled ? 'Pip on' : 'Pip off';
+    toggle.textContent = enabled ? 'Bonish on' : 'Bonish off';
     toggle.setAttribute('aria-pressed', String(enabled));
     cat.classList.toggle('is-hidden', !enabled);
     if (enabled) scheduleNap();
